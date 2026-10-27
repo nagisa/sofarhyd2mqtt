@@ -1,0 +1,106 @@
+# sofarhyd2mqtt
+
+Exposes a Sofar HYD 5…20KTL-3PH hybrid inverter to MQTT following the
+[Homie 5 convention](https://homieiot.github.io/). Talks to the inverter over Modbus TCP through an
+RS485 gateway.
+
+## Usage
+
+```
+sofarhyd2mqtt mqtt --tcp gateway.local:502 --mqtt-broker mqtt://broker:1883?client_id=sofarhyd
+sofarhyd2mqtt dump --tcp gateway.local:502
+```
+
+`--tcp` is the address of the gateway, which is expected to speak Modbus TCP and relay it to the
+RS485 bus. `--unit-id` is the Modbus address of the inverter (1 by default).
+`SOFARHYD2MQTT_LOG=debug` makes it more talkative.
+
+`dump` reads the inverter once and prints every property. It never writes.
+
+### Writes
+
+By default **nothing is ever written** to the inverter: no property is settable. Pass
+`--allow-writes` to be able to change the settings marked settable below. After a set, the value
+the inverter actually has is published, even if it is unchanged, so a controller can tell whether
+the inverter took it.
+
+Setting `inverter/sync-clock` to `now` sets the clock of the inverter to the local time of the
+system the bridge runs on.
+
+### Polling
+
+`--poll-period` (4 seconds by default) is how often the state of the inverter is read. The energy
+counters are read every 15 seconds, the settings every 30 seconds, and the serial number and the
+versions every 10 minutes. `--unavailable-after` (60 seconds by default) is for how long the
+inverter can go without responding before it is `disconnected`. `--timeout` (3 seconds) and
+`--request-gap` (20 ms) tune the requests.
+
+The PV inputs and the batteries are as the inputs of the inverter are set up, up to 4 of each.
+
+## Devices
+
+* **`sofarhyd`** is the bridge: the root device, without nodes. `--device-id` changes it.
+* **`sofarhyd-<serial number>`** is the inverter, the child of the bridge. The serial number is
+  lowercased, with each run of anything but letters and digits made into a hyphen.
+
+The inverter is published once everything has been read; the bridge can be `ready` without
+children until then. While the inverter does not respond, it is `disconnected`. If its inputs are
+set up differently, it is published anew.
+
+## Nodes and properties of the inverter
+
+**Positive power is power into the house's system**: buying from the grid and charging the
+battery are positive, selling and discharging are negative. The powers of what the inverter puts
+(`inverter/output-power`, the phases, the `eps` node) are positive when it puts power out.
+
+| Node | Property | Type | Unit | Notes |
+|---|---|---|---|---|
+| `inverter` | `state` | enum | | `waiting`, `checking`, `on-grid`, `off-grid` (on the EPS output), `fault`, `permanent-fault`, `updating`, `self-charging` |
+| | `faults` | JSON | | the active faults, alarms and reasons for derating, as `["ID162 RemoteShutdown", …]`, the ID being what the display shows |
+| | `enabled` | boolean | | settable. `false` turns the inverter off |
+| | `storage-mode` | enum | | settable. `self-use`, `time-of-use`, `timing`, `passive`, `peak-shaving` |
+| | `output-power` | integer | W | the AC power that the inverter puts out, to the grid and the EPS output together |
+| | `ambient-temperature`, `heatsink-temperature`, `internal-temperature` | integer | °C | |
+| | `insulation-resistance` | integer | kΩ | |
+| | `clock` | datetime | | settable. The inverter's clock has no time zone. Setting an instant (with an offset) sets the local time of the bridge's system at that instant |
+| | `sync-clock` | enum | | settable only, not retained. `now` sets the clock to the bridge's local time. Only there with `--allow-writes` |
+| `grid` | `power` | integer | W | at the meter or CT |
+| | `reactive-power` | integer | var | at the meter or CT |
+| | `frequency` | float | Hz | |
+| `load` | `power` | integer | W | what the house uses |
+| `eps` | `mode` | enum | | settable. `disabled`, `enabled`, `enabled-with-cold-start` (the EPS output can start from the battery alone) |
+| | `power` | integer | W | of the EPS output |
+| | `frequency` | float | Hz | |
+| `l1`, `l2`, `l3` | `voltage` | float | V | of the phase |
+| | `output-current`, `output-power` | | A, W | what the inverter puts out on the phase |
+| | `eps-voltage`, `eps-current`, `eps-power` | | V, A, W | of the EPS output on the phase |
+| `pv` | `power` | integer | W | of all the PV inputs together |
+| | `external-power` | integer | W | of an external (AC coupled) PV inverter |
+| `pv-N` | `voltage`, `current`, `power` | | V, A, W | for each PV input, counted from 1 |
+| `battery` | `voltage`, `current`, `power` | | V, A, W | |
+| | `temperature` | integer | °C | |
+| | `state-of-charge`, `state-of-health` | integer | % | |
+| | `cycles` | integer | # | |
+| `energy` | `solar-today`, `consumed-today`, `imported-today`, `exported-today`, `charged-today`, `discharged-today` | float | kWh | |
+| | `solar-total`, `consumed-total`, `imported-total`, `exported-total`, `charged-total`, `discharged-total` | float | kWh | |
+| `passive` | `mode` | enum | | settable. `auto`, `manual` or `scheduler`: which settings the passive mode follows. Only those of `manual` are exposed |
+| | `grid-power` | integer | W | settable. The desired grid power |
+| | `battery-min-power`, `battery-max-power` | integer | W | settable. The bounds of the battery power |
+| | `export-limit`, `import-limit` | integer | W | settable. How much may be sold to and bought from the grid |
+| | `timeout` | integer | s | settable. `0:65535`, 0 for none. The `timeout-action` is taken if the passive mode settings are not set again within this long |
+| | `timeout-action` | enum | | settable. `standby` or `previous-mode` (the storage mode from before the passive mode) |
+| `identification` | `serial-number`, `hardware-version` | string | | |
+| | `communication-firmware`, `primary-firmware`, `secondary-firmware` | string | | as in `V120005` |
+| | `safety-version` | string | | the version of the country (safety) settings, as in `10.08` |
+
+With more than one battery the nodes are `battery-1`, `battery-2` and so on.
+
+A value that is not valid (an unknown state, a state of charge above 100 %, a clock that is not a
+date and so on) is not published: the last valid value stays.
+
+The time-of-use, timing and peak shaving schedules and the installer settings (battery
+configuration, feed-in limit and so on) are not exposed: use the inverter's menu or app for those.
+
+## Caveats
+
+* The clock can only be set to a year up to 2099.
