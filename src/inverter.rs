@@ -256,7 +256,6 @@ pub(crate) fn state(snapshot: &Snapshot) -> Reading {
     Some(state.map(|state| state.to_string()).ok_or(Invalid("not a known state")))
 }
 
-/// SUBTLE: the bytes of each word are in the order of the codes, high byte first.
 #[rustfmt::skip]
 const FAULT_NAMES: [[&str; 16]; 12] = [
     ["GridOVP", "GridUVP", "GridOFP", "GridUFP", "GFCI", "OVRT", "LVRT", "IslandFault",
@@ -298,7 +297,7 @@ const FAULT_NAMES: [[&str; 16]; 12] = [
 pub(crate) fn faults(snapshot: &Snapshot) -> Reading {
     let mut active = Vec::new();
     for (index, names) in (0u16..).zip(&FAULT_NAMES) {
-        let bits = word(snapshot, reg::FAULTS + index)?.swap_bytes();
+        let bits = word(snapshot, reg::FAULTS + index)?;
         for (bit, name) in (0u16..).zip(names) {
             if bits & (1 << bit) != 0 {
                 let code = index * 16 + bit + 1;
@@ -539,8 +538,8 @@ pub(crate) mod tests {
         };
         let mut status = [0u16; STATUS.count as usize];
         status[0] = 2;
-        status[1] = 0x0100;
-        status[(0x040F - 0x0404) as usize] = 0x1000;
+        status[1] = 0x0001;
+        status[(0x040F - 0x0404) as usize] = 0x0010;
         status[(0x0418 - 0x0404) as usize] = 31;
         status[(0x041A - 0x0404) as usize] = 45;
         status[(0x0420 - 0x0404) as usize] = 0xFFFE;
@@ -685,7 +684,7 @@ pub(crate) mod tests {
     #[test]
     fn unnamed_faults_are_known_by_their_code() {
         let mut s = fixture();
-        s.set_many(reg::FAULTS, &[0x0010, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x0200, 0x0180]);
+        s.set_many(reg::FAULTS, &[0x1000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x0002, 0x8001]);
         let active = ok(faults(&s));
         assert_eq!(active, r#"["ID013","ID162 RemoteShutdown","ID177 BmsOVP","ID192"]"#);
         s.set_many(reg::FAULTS, &[0; 12]);
