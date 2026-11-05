@@ -1,4 +1,5 @@
 pub mod mqtt {
+    use crate::Chain;
     use crate::homie::{self, Command};
     use crate::modbus;
     use rumqttc::v5::mqttbytes::v5::LastWill;
@@ -115,11 +116,11 @@ pub mod mqtt {
                     result = poll_at(&mut client_loop, poll_not_before) => match result {
                         Ok(event) => event,
                         Err(error) => {
-                            let error = &error as &dyn std::error::Error;
+                            let error = Chain(&error);
                             if failures == 0 {
-                                tracing::warn!(error, "cannot reach the MQTT broker, will keep trying");
+                                tracing::warn!(%error, "cannot reach the MQTT broker, will keep trying");
                             } else {
-                                tracing::debug!(error, "could not connect to the MQTT broker");
+                                tracing::debug!(%error, "could not connect to the MQTT broker");
                             }
                             failures = failures.saturating_add(1);
                             poll_not_before = Instant::now() + reconnect_delay(failures);

@@ -6,6 +6,7 @@ mod snapshot;
 pub use client::{Client, Error as RequestError, ExceptionCode, MAX_READ, MAX_WRITE};
 pub use snapshot::Snapshot;
 
+use crate::Chain;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::Duration;
 use tokio::sync::{Notify, mpsc, oneshot};
@@ -217,7 +218,7 @@ pub async fn read_once(
                 snapshot.record_success(Instant::now());
             }
             Err(e) => {
-                debug!(error = (&e as &dyn std::error::Error), %block, "could not read out the registers");
+                debug!(error = %Chain(&e), %block, "could not read out the registers");
                 failed.push((PollBlock { start, count, period }, e));
             }
         }
@@ -372,7 +373,7 @@ impl Worker {
         let started = Instant::now();
         let written = until_done(&self.shared, self.client.write(start, words)).await;
         if let Err(e) = written {
-            warn!(error = (&e as &dyn std::error::Error), start, "could not write the registers");
+            warn!(error = %Chain(&e), start, "could not write the registers");
             return Err(WriteError::Request(e));
         }
         self.succeeded(Instant::now());
@@ -386,7 +387,7 @@ impl Worker {
                 Ok(chunk) => read_back.extend(chunk),
                 Err(e) => {
                     warn!(
-                        error = (&e as &dyn std::error::Error),
+                        error = %Chain(&e),
                         start, "could not read back the registers"
                     );
                     return Err(WriteError::Request(e));
@@ -452,7 +453,7 @@ impl Worker {
             }
             Err(e) => {
                 if !matches!(was, Status::Failing(_)) {
-                    warn!(error = (&e as &dyn std::error::Error), %block, "could not read out the registers");
+                    warn!(error = %Chain(&e), %block, "could not read out the registers");
                 }
                 block.status = Status::Failing(match (&e, was) {
                     // The inverter would only say the same if asked again at once.
